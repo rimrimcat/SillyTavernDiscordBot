@@ -27,13 +27,13 @@ class MyClient(discord.Client):
                 "character": "",
                 "trigger": False,
             }
-            resp = requests.post(DM_URL, json=data)
+            resp: requests.models.Response = requests.post(DM_URL, json=data)
             resp_data: Responses.Response = resp.json()
             await message.channel.send(resp_data["data"]["message"])
             return
         elif client.user in message.mentions:
             # Mentioned in Server
-            data: Datas.Data = {
+            data = {
                 "persona": message.author.name,
                 "chat": f"{message.channel.guild.name}_{message.channel.id}",
                 "message": message.content,
@@ -41,19 +41,19 @@ class MyClient(discord.Client):
                 "trigger": True,
             }
             resp = requests.post(GROUP_URL, json=data)
-            resp_data: Responses.Response = resp.json()
-            await message.channel.send(resp["data"]["message"])
+            resp_data = resp.json()
+            await message.channel.send(resp_data["data"]["message"])
         else:
             # Not Mentioned
-            data: Datas.Data = {
+            data = {
                 "persona": message.author.name,
                 "chat": f"{message.channel.guild.name}_{message.channel.id}",
                 "message": message.content,
                 "character": "",
                 "trigger": False,
             }
-            resp: requests.models.Response = requests.post(GROUP_URL, json=data)
-            resp_data: Responses.Response = resp.json()
+            resp = requests.post(GROUP_URL, json=data)
+            resp_data = resp.json()
 
 
 intents = discord.Intents.default()
