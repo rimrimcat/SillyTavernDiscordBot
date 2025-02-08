@@ -1,15 +1,15 @@
 # SillyTavernDiscordBot
 
-Allows for interaction between SillyTavern and Discord using Playwright and Discord.py. 
+Allows for interaction between SillyTavern and Discord using Playwright and Hikari.
 
 ## Installation
 
 In your venv or conda environment:
-```
-pip install pytest-playwright
+
+```bash
+pip install -r requirements
 playwright install-deps
 playwright install chromium
-pip install -r requirements
 ```
 
 ## Usage
@@ -24,7 +24,6 @@ If done, run `st_server.py` and `discord_bot_example.py` (can be done on separat
 
 DM your discord bot, or add to a server channel and mention if you want it to generate a message.
 
-
 ## How does it work?
 
 1. `ST` class uses Playwright to create a headless chromium browser that connects to SillyTavern, simulating user actions such as changing persona, changing chat, or sending a message.
@@ -34,8 +33,4 @@ DM your discord bot, or add to a server channel and mention if you want it to ge
 
 ## Contributing
 
-Feel free to contribute. 
-
-
-
-#### And yes IDK why I made `AsyncServer` when you could have connected discord.py directly to `ST`. Don't ask me why. It is what it is. 
+Feel free to contribute.

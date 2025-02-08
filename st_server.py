@@ -1,8 +1,8 @@
 import asyncio
-import nest_asyncio
 from time import sleep
 from typing import Any, Literal, Optional, TypedDict
 
+import nest_asyncio
 from aiohttp import web
 from playwright.async_api import (
     Browser,
@@ -12,8 +12,12 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from settings import SILLY_TAVERN_PORT, LOCAL_SERVER_PORT, CHARACTER_NAME
-
+from settings import (
+    CHARACTER_NAME,
+    LOCAL_SERVER_PORT,
+    PLAYWRIGHT_TIMEOUT,
+    SILLY_TAVERN_PORT,
+)
 
 SILLY_TAVERN_URL = f"http://localhost:{SILLY_TAVERN_PORT}"
 
@@ -52,6 +56,7 @@ LLM_GROUP_CHARACTER = f'//div[@title="[Group] Group: {CHARACTER_NAME}"]'
 
 ## PERSONA
 PERSONA_MANAGEMENT = '//div[@title="Persona Management"]'
+PERSONA_MANAGEMENT_BLOCK = '//div[@id="persona-management-block"]'
 NEW_PERSONA = '//div[@id="create_dummy_persona"]'
 POPUP_NEW_PERSONA = (
     '//textarea[@class="popup-input text_pole result-control auto-select"]'
@@ -140,154 +145,96 @@ class ST:
         browsertype = playwright.chromium  # or "firefox" or "webkit".
         browser = await browsertype.launch(headless=True, slow_mo=50)
         page = await browser.new_page()
+        page.set_default_navigation_timeout(PLAYWRIGHT_TIMEOUT)
+        page.set_default_timeout(PLAYWRIGHT_TIMEOUT)
 
         await page.goto(SILLY_TAVERN_URL)
 
         return ST(browsertype, browser, page)
-
-    async def click(self, element: str, timeout: Optional[float] = None):
-        await self.page.wait_for_selector(element, timeout=timeout)
-        await self.page.click(element)
 
     async def type(self, element: str, content: str):
         await self.page.wait_for_selector(element)
         textarea = self.page.locator(element)
         await textarea.fill(content)
 
-    async def click_inner(self, elements: list[str]):
-        await self.page.wait_for_selector(elements[0])
-        curr_selector = self.page.locator(elements[0])
-
-        for element in elements[1:]:
-            curr_selector = curr_selector.locator(element)
-
-        # await self.page.click(curr_selector)
-        await curr_selector.click()
-
-    async def click_first(self, element: str):
-        blocks = await self.page.query_selector_all(CHAT_HISTORY_BLOCKS)
-        await blocks[0].click()
-
     async def wait_load(self):
-        await self.page.wait_for_selector(THROBBER, state="visible")
-        await self.page.wait_for_selector(THROBBER, state="hidden")
+        await self.page.wait_for_selector(THROBBER, state="visible", timeout=5000)
+        await self.page.wait_for_selector(THROBBER, state="hidden", timeout=5000)
 
     async def select_direct(self):
-        await self.click(CHARACTERS)
-        await self.click(LLM_CHARACTER)
-        await self.click(CHARACTERS)
+        await self.page.click(CHARACTERS)
+        await self.page.click(LLM_CHARACTER)
+        await self.page.click(CHARACTERS)
 
     async def select_group(self):
-        await self.click(CHARACTERS)
-        await self.click(LLM_GROUP_CHARACTER)
-        await self.click(CHARACTERS)
+        await self.page.click(CHARACTERS)
+        await self.page.click(LLM_GROUP_CHARACTER)
+        await self.page.click(CHARACTERS)
 
     async def send_message(self, message: str):
         await self.page.locator(CHAT_AREA).fill(message)
-        await self.click(CHAT_SEND)
+        await self.page.click(CHAT_SEND)
 
     async def start(self):
-        await self.click(CONNECTIONS)
-        await self.click(CONNECT_API)
-        await self.click(CONNECTIONS)
-
-    async def new_chat(self, chat_name: str):
-        await self.click(CHAT_MENU)
-        await self.click(MANAGE_CHAT_FILES)
-        await self.click(CHAT_HISTORY_NEW)
-
-        await self.click(CHAT_MENU)
-        await self.click(MANAGE_CHAT_FILES)
-
-        blocks = await self.page.query_selector_all(CHAT_HISTORY_BLOCKS)
-        rename_chat = await blocks[0].query_selector(RENAME_CHAT)
-        if rename_chat is None:
-            raise RuntimeError("Can't find rename_chat! Did UI change?")
-        await rename_chat.click()
-        await self.type(POPUP_RENAME_CHAT, chat_name)
-        await self.click(OK_2)
-        await self.click(CLOSE)
-
-    async def new_persona(self, persona: str):
-        await self.click(PERSONA_MANAGEMENT)
-        await self.click(NEW_PERSONA)
-        await self.type(POPUP_NEW_PERSONA, persona)
-        await self.click(OK)
-        await self.click(PERSONA_MANAGEMENT)
-        sleep(0.1)
-
-    async def switch_chat(self, chat_name: str):
-        await self.click(CHAT_MENU)
-        await self.click(MANAGE_CHAT_FILES)
-        await self.page.get_by_text(chat_name + ".jsonl", exact=True).click()
-        await self.wait_load()
-
-    async def switch_persona(self, persona: str):
-        await self.click(PERSONA_MANAGEMENT)
-
-        loc = self.page.locator('//div[@id="persona-management-block"]')
-        await loc.locator('//span[@class="ch_name flex1"]', has_text=persona).click()
-
-        try:
-            await self.click(TOAST_CLOSE, timeout=50)
-            print("toast successfully pressed")
-        except:
-            pass
-
-        await self.click(PERSONA_MANAGEMENT)
-        sleep(0.1)
+        await self.page.click(CONNECTIONS)
+        await self.page.click(CONNECT_API)
+        await self.page.click(CONNECTIONS)
 
     async def switch_or_new_persona(self, persona: str):
-        await self.click(PERSONA_MANAGEMENT)
+        await self.page.click(PERSONA_MANAGEMENT)
 
         # wait for animation
-        loc = self.page.locator('//div[@id="persona-management-button"]')
-        await loc.locator('//div[@class="drawer-content openDrawer"]').wait_for()
+        await (
+            self.page.locator('//div[@id="persona-management-button"]')
+            .locator('//div[@class="drawer-content openDrawer"]')
+            .wait_for()
+        )
 
         await self.page.select_option(
             '//select[@class="J-paginationjs-size-select"]', value="1000"
         )
 
-        try:
-            loc = self.page.locator('//div[@id="persona-management-block"]')
-            await loc.locator('//span[@class="ch_name flex1"]', has_text=persona).click(
-                timeout=500
-            )
-            print(f"Switching to persona {persona}")
+        loc_existing_persona = (
+            self.page.locator(PERSONA_MANAGEMENT_BLOCK)
+            .locator('//span[@class="ch_name flex1"]')
+            .get_by_text(persona, exact=True)
+        )
 
-            try:
-                await self.click(TOAST_CLOSE, timeout=100)
-            except:
-                print(f"Already using persona {persona}!")
-        except:
-            # PERSONA DOESN'T EXIST
+        if await loc_existing_persona.is_visible(timeout=500):
+            print(f"Switching to persona {persona}")
+            await loc_existing_persona.click()
+
+            if await self.page.locator(TOAST_CLOSE).is_visible(timeout=50):
+                await self.page.click(TOAST_CLOSE)
+        else:
             print(f"Creating persona {persona}!")
-            await self.click(NEW_PERSONA)
+            await self.page.click(NEW_PERSONA)
             await self.type(POPUP_NEW_PERSONA, persona)
             await self.page.locator(POPUP_PERSONA_BODY).press("Enter")
-            
-            # SELECT PERSONA
-            loc = self.page.locator('//div[@id="persona-management-block"]')
-            await loc.locator('//span[@class="ch_name flex1"]', has_text=persona).click()
-            await self.click(TOAST_CLOSE, timeout=50)
-        
-        await self.click(PERSONA_MANAGEMENT)
+
+            await loc_existing_persona.click()
+
+            if await self.page.locator(TOAST_CLOSE).is_visible(timeout=50):
+                await self.page.click(TOAST_CLOSE)
+
+        await self.page.click(PERSONA_MANAGEMENT)
         sleep(0.2)
 
     async def switch_or_new_chat(self, chat_name: str):
-        await self.click(CHAT_MENU)
-        await self.click(MANAGE_CHAT_FILES)
-        try:
-            await self.page.get_by_text(chat_name + ".jsonl", exact=True).click(
-                timeout=700
-            )
+        await self.page.click(CHAT_MENU)
+        await self.page.click(MANAGE_CHAT_FILES)
+
+        loc_existing_chat = self.page.get_by_text(chat_name + ".jsonl", exact=True)
+
+        if await loc_existing_chat.is_visible(timeout=700):
             print(f"Switching to chat {chat_name}")
+            await loc_existing_chat.click()
             await self.wait_load()
-        except:
+        else:
             print(f"Creating new chat {chat_name}")
-            await self.click(CHAT_HISTORY_NEW)
-            await self.click(CHAT_MENU)
-            await self.click(MANAGE_CHAT_FILES)
+            await self.page.click(CHAT_HISTORY_NEW)
+            await self.page.click(CHAT_MENU)
+            await self.page.click(MANAGE_CHAT_FILES)
 
             blocks = await self.page.query_selector_all(CHAT_HISTORY_BLOCKS)
             rename_chat = await blocks[0].query_selector(RENAME_CHAT)
@@ -295,21 +242,23 @@ class ST:
                 raise RuntimeError("Can't find rename_chat! Did UI change?")
             await rename_chat.click()
             await self.type(POPUP_RENAME_CHAT, chat_name)
-            await self.click(OK_2)
-            await self.click(CLOSE)
+            await self.page.click(OK_2)
+            await self.page.click(CLOSE)
 
     async def switch_or_new_group_chat(self, chat_name: str):
-        await self.click(CHAT_MENU)
-        await self.click(MANAGE_CHAT_FILES)
-        try:
-            await self.page.get_by_text(chat_name, exact=True).click(timeout=700)
+        await self.page.click(CHAT_MENU)
+        await self.page.click(MANAGE_CHAT_FILES)
+
+        loc_existing_group_chat = self.page.get_by_text(chat_name, exact=True)
+        if loc_existing_group_chat.is_visible(timeout=700):
             print(f"Switching to chat {chat_name}")
+            await loc_existing_group_chat.click()
             await self.wait_load()
-        except:
+        else:
             print(f"Creating new chat {chat_name}")
-            await self.click(CHAT_HISTORY_NEW)
-            await self.click(CHAT_MENU)
-            await self.click(MANAGE_CHAT_FILES)
+            await self.page.click(CHAT_HISTORY_NEW)
+            await self.page.click(CHAT_MENU)
+            await self.page.click(MANAGE_CHAT_FILES)
 
             blocks = await self.page.query_selector_all(CHAT_HISTORY_BLOCKS)
             rename_chat = await blocks[0].query_selector(RENAME_CHAT)
@@ -317,66 +266,74 @@ class ST:
                 raise RuntimeError("Can't find rename_chat! Did UI change?")
             await rename_chat.click()
             await self.type(POPUP_RENAME_CHAT, chat_name)
-            await self.click(OK_2)
-            await self.click(CLOSE)
+            await self.page.click(OK_2)
+            await self.page.click(CLOSE)
 
     async def get_persona_description(self, persona: Optional[str] = None):
         desc = ""
 
-        await self.click(PERSONA_MANAGEMENT)
-        # wait for animation
-        loc = self.page.locator('//div[@id="persona-management-button"]')
-        await loc.locator('//div[@class="drawer-content openDrawer"]').wait_for()
+        await self.page.click(PERSONA_MANAGEMENT)
+        # Wait for animation
+        await (
+            self.page.locator('//div[@id="persona-management-button"]')
+            .locator('//div[@class="drawer-content openDrawer"]')
+            .wait_for()
+        )
 
         await self.page.select_option(
             '//select[@class="J-paginationjs-size-select"]', value="1000"
         )
 
-        try:
-            if persona is not None:
-                loc = self.page.locator('//div[@id="persona-management-block"]')
-                await loc.locator(
-                    '//span[@class="ch_name flex1"]', has_text=persona
-                ).click(timeout=500)
-                try:
-                    await self.click(TOAST_CLOSE, timeout=100)
-                except:
-                    print(f"Already using persona {persona}!")
+        if persona is not None:
+            loc_existing_persona = (
+                self.page.locator(PERSONA_MANAGEMENT_BLOCK)
+                .locator('//span[@class="ch_name flex1"]')
+                .get_by_text(persona, exact=True)
+            )
 
-            desc = await self.page.locator(PERSONA_DESCRIPTION).input_value()
-        except:
-            pass
+            if await loc_existing_persona.is_visible(timeout=500):
+                await loc_existing_persona.click()
 
-        await self.click(PERSONA_MANAGEMENT)
+                if await self.page.locator(TOAST_CLOSE).is_visible(timeout=50):
+                    await self.page.click(TOAST_CLOSE)
+
+        desc = await self.page.locator(PERSONA_DESCRIPTION).input_value()
+
+        await self.page.click(PERSONA_MANAGEMENT)
         sleep(0.2)
 
         return desc
 
     async def set_persona_description(self, persona: str, desc: str):
-        await self.click(PERSONA_MANAGEMENT)
+        await self.page.click(PERSONA_MANAGEMENT)
         # wait for animation
-        loc = self.page.locator('//div[@id="persona-management-button"]')
-        await loc.locator('//div[@class="drawer-content openDrawer"]').wait_for()
+        await (
+            self.page.locator('//div[@id="persona-management-button"]')
+            .locator('//div[@class="drawer-content openDrawer"]')
+            .wait_for()
+        )
 
         await self.page.select_option(
             '//select[@class="J-paginationjs-size-select"]', value="1000"
         )
 
-        try:
-            loc = self.page.locator('//div[@id="persona-management-block"]')
-            await loc.locator('//span[@class="ch_name flex1"]', has_text=persona).click(
-                timeout=500
-            )
-            try:
-                await self.click(TOAST_CLOSE, timeout=100)
-            except:
-                print(f"Already using persona {persona}!")
+        loc_existing_persona = (
+            self.page.locator(PERSONA_MANAGEMENT_BLOCK)
+            .locator('//span[@class="ch_name flex1"]')
+            .get_by_text(persona, exact=True)
+        )
+
+        if await loc_existing_persona.is_visible(timeout=500):
+            await loc_existing_persona.click()
+
+            if await self.page.locator(TOAST_CLOSE).is_visible(timeout=50):
+                await self.page.click(TOAST_CLOSE)
 
             await self.page.locator(PERSONA_DESCRIPTION).fill(desc)
-        except:
-            pass
+        else:
+            print(f"Persona {persona} not found!")
 
-        await self.click(PERSONA_MANAGEMENT)
+        await self.page.click(PERSONA_MANAGEMENT)
         sleep(0.2)
 
     async def get_llm_response(self):
@@ -410,6 +367,7 @@ class ST:
 
     async def done(self):
         await self.page.reload()
+        await self.wait_load()
         await self.start()
 
     async def close(self):
@@ -447,6 +405,7 @@ class AsyncServer:
     def validate_data_for_chat(self, data: Datas.Data):
         missing_keys: list[str] = []
         for key in ["persona", "chat", "message"]:
+            # trunk-ignore(mypy/literal-required)
             if not data[key]:
                 missing_keys.append(key)
 
@@ -468,6 +427,7 @@ class AsyncServer:
             return val_resp
 
         message = await self.st.send_direct_message(
+            # trunk-ignore-all(mypy/arg-type)
             persona=data.get("persona"),
             message=data.get("message"),
             chat_name=data.get("chat"),
@@ -524,9 +484,10 @@ async def main():
     async with async_playwright() as playwright:
         st = await ST.create(playwright)
         await st.done()
-        
+
         ass = AsyncServer(st)
         await ass.run()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
