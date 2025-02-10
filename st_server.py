@@ -18,6 +18,7 @@ from settings import (
     LOCAL_SERVER_PORT,
     PLAYWRIGHT_TIMEOUT,
     SILLY_TAVERN_PORT,
+    TEMP_FOLDER,
 )
 
 SILLY_TAVERN_URL = f"http://localhost:{SILLY_TAVERN_PORT}"
@@ -69,12 +70,19 @@ ALTERNATE_GREET_ITEM = '//div[@class="alternate_greeting"]'
 PERSONA_MANAGEMENT = '//div[@title="Persona Management"]'
 PERSONA_MANAGEMENT_BLOCK = '//div[@id="persona-management-block"]'
 NEW_PERSONA = '//div[@id="create_dummy_persona"]'
-POPUP_NEW_PERSONA = (
+POPUP_NEW_PERSONA_NAME = (
     '//textarea[@class="popup-input text_pole result-control auto-select"]'
 )
 POPUP_PERSONA_BODY = '//div[@class="popup-body"]'
 PERSONA_DESCRIPTION = '//textarea[@id="persona_description"]'
 
+SELECTED_PERSONA = '//div[@class="avatar-container interactable selected"]'
+
+RENAME_PERSONA_BUTTON = '//button[@title="Bind user name to that avatar"]'
+
+
+DELETE_PERSONA_BUTTON = '//button[@title="Delete persona"]'
+DELETE_PERSONA_CONFIRM = '//div[@class="popup-button-ok menu_button result-control menu_button_default interactable"]'
 
 OK = '//div[@data-i18n="OK"]'
 OK_2 = '//div[@id="dialogue_popup_ok"]'
@@ -108,13 +116,14 @@ class Datas:
     def for_dm(
         author_handle: str,
         message: str = "",
+        trigger: bool = False,
     ) -> Data:
         return {
             "persona": author_handle,
             "chat": author_handle,
             "message": message,
             "character": "",
-            "trigger": False,
+            "trigger": trigger,
             "group": False,
         }
 
@@ -173,6 +182,14 @@ class Responses:
         }
 
     @staticmethod
+    def response(message: str) -> Response:
+        return {
+            "status": "success",
+            "data": {"message": message},
+            "message": "",
+        }
+
+    @staticmethod
     def successful_send() -> Response:
         return {
             "status": "success",
@@ -189,7 +206,7 @@ class Responses:
         }
 
     @staticmethod
-    def responses(messages: list[str]) -> Response:
+    def response_list(messages: list[str]) -> Response:
         return {
             "status": "success",
             "data": {"messages": messages},
@@ -217,7 +234,7 @@ class ST:
     @classmethod
     async def create(cls, playwright: Playwright):
         browsertype = playwright.chromium  # or "firefox" or "webkit".
-        browser = await browsertype.launch(headless=False, slow_mo=50)
+        browser = await browsertype.launch(headless=True, slow_mo=50)
         page = await browser.new_page()
         page.set_default_navigation_timeout(PLAYWRIGHT_TIMEOUT)
         page.set_default_timeout(PLAYWRIGHT_TIMEOUT)
@@ -243,7 +260,7 @@ class ST:
             await self.page.click(CARD_PNG)
         download = await dl.value
 
-        save_path = f"ST_SERVER_TEMP/{download.suggested_filename}"
+        save_path = f"{TEMP_FOLDER}/{download.suggested_filename}"
         await download.save_as(save_path)
         return save_path
 
@@ -295,7 +312,7 @@ class ST:
         else:
             print(f"Creating persona {persona}!")
             await self.page.click(NEW_PERSONA)
-            await self.type(POPUP_NEW_PERSONA, persona)
+            await self.type(POPUP_NEW_PERSONA_NAME, persona)
             await self.page.locator(POPUP_PERSONA_BODY).press("Enter")
 
             await loc_existing_persona.click()
@@ -305,6 +322,47 @@ class ST:
 
         await self.page.click(PERSONA_MANAGEMENT)
         sleep(0.2)
+
+    async def rename_persona(self, persona: str, new_name: str):
+        await self.page.click(PERSONA_MANAGEMENT)
+
+        # wait for animation
+        await (
+            self.page.locator('//div[@id="persona-management-button"]')
+            .locator('//div[@class="drawer-content openDrawer"]')
+            .wait_for()
+        )
+
+        await self.page.select_option(
+            '//select[@class="J-paginationjs-size-select"]', value="1000"
+        )
+
+        loc_existing_persona = (
+            self.page.locator(PERSONA_MANAGEMENT_BLOCK)
+            .locator('//span[@class="ch_name flex1"]')
+            .get_by_text(persona, exact=True)
+        )
+
+        if await loc_existing_persona.is_visible(timeout=500):
+            print(f"Switching to persona {persona}")
+            await loc_existing_persona.click()
+
+            if await self.page.locator(TOAST_CLOSE).is_visible(timeout=50):
+                await self.page.click(TOAST_CLOSE)
+
+            print(f"Changing persona name to {new_name}")
+            await (
+                self.page.locator(SELECTED_PERSONA)
+                .locator(RENAME_PERSONA_BUTTON)
+                .click()
+            )
+            await self.page.locator(POPUP_NEW_PERSONA_NAME).fill(new_name)
+            await self.page.locator(POPUP_NEW_PERSONA_NAME).press("Enter")
+
+            await self.page.click(PERSONA_MANAGEMENT)
+        else:
+            print("Persona doesn't exist!")
+            await self.page.click(PERSONA_MANAGEMENT)
 
     async def switch_or_new_chat(self, chat_name: str):
         await self.page.click(CHAT_MENU)
@@ -329,6 +387,36 @@ class ST:
             await rename_chat.click()
             await self.type(POPUP_RENAME_CHAT, chat_name)
             await self.page.click(OK_2)
+            await self.page.click(CLOSE)
+
+    async def rename_chat(self, chat_name: str, new_name: str):
+        await self.page.click(CHAT_MENU)
+        await self.page.click(MANAGE_CHAT_FILES)
+
+        loc_existing_chat = self.page.get_by_text(chat_name + ".jsonl", exact=True)
+
+        if await loc_existing_chat.is_visible(timeout=1000):
+            print(f"Switching to chat {chat_name}")
+            await loc_existing_chat.click()
+            await self.wait_load()
+
+            await self.page.click(CHAT_MENU)
+            await self.page.click(MANAGE_CHAT_FILES)
+
+            await (
+                self.page.locator(CHAT_HISTORY_SELECTED_BLOCK)
+                .locator(RENAME_CHAT)
+                .click()
+            )
+
+            print(f"Renaming to {new_name}")
+            await self.type(POPUP_RENAME_CHAT, new_name)
+            await self.page.click(OK_2)
+            await self.wait_load()
+            await self.page.click(CLOSE)
+
+        else:
+            print(f"Chat {chat_name} not found!")
             await self.page.click(CLOSE)
 
     async def delete_selected_chat(self):
@@ -594,7 +682,9 @@ class AsyncServer:
         self.app.router.add_get("/heartbeat", self.main)
         self.app.router.add_get("/card", self.card)
         self.app.router.add_get("/greet", self.greet)
+        self.app.router.add_post("/desc", self.desc)
         self.app.router.add_post("/chat", self.chat)
+        self.app.router.add_post("/nickname", self.nickname)
         self.app.router.add_post("/regenerate", self.regenerate)
         self.app.router.add_post("/clear", self.clear)
 
@@ -616,7 +706,7 @@ class AsyncServer:
         greets = await self.st.get_llm_greetings()
         await self.st.done()
         return web.json_response(
-            Responses.responses(greets),
+            Responses.response_list(greets),
             status=200,
         )
 
@@ -639,6 +729,33 @@ class AsyncServer:
             print(f"{self.name}: Response\n{resp}")
             return resp
         return None
+
+    async def desc(self, request: web.Request):
+        data: Datas.Data = await request.json()
+        print(f"{self.name}: Received description request:\n{data}")
+        val_resp = self.validate_data_for_chat(data, ("persona",))
+
+        if val_resp:
+            return val_resp
+
+        if data["trigger"]:
+            # Trigger means to set description
+            await self.st.set_persona_description(
+                persona=data["persona"], desc=data["message"]
+            )
+            await self.st.done()
+            print(f"{self.name}: Success.")
+            return web.json_response(
+                Responses.successful_send(),
+            )
+        else:
+            # Not trigger means to only get description
+            desc = await self.st.get_persona_description(data["persona"])
+            await self.st.done()
+            print(f"{self.name}: Success.")
+            return web.json_response(
+                Responses.response(desc),
+            )
 
     async def chat(self, request: web.Request):
         data: Datas.Data = await request.json()
@@ -696,6 +813,23 @@ class AsyncServer:
                 Responses.llm_response(message),
             )
 
+    async def nickname(self, request: web.Request):
+        data: Datas.Data = await request.json()
+        print(f"{self.name}: Received nickname request:\n{data}")
+        val_resp = self.validate_data_for_chat(data, ("persona", "chat", "message"))
+
+        if val_resp:
+            return val_resp
+
+        await self.st.select_direct()
+        await self.st.rename_persona(data["persona"], data["message"])
+        await self.st.rename_chat(data["chat"], data["message"])
+        await self.st.done()
+        print(f"{self.name}: Success.")
+        return web.json_response(
+            Responses.successful_send(),
+        )
+
     async def regenerate(self, request: web.Request):
         data: Datas.Data = await request.json()
         print(f"{self.name}: Received regenerate request:\n{data}")
@@ -714,8 +848,10 @@ class AsyncServer:
                 persona=data["persona"],
                 chat_name=data["chat"],
             )
+
         await self.st.done()
         print(f"{self.name}: Success.")
+
         return web.json_response(
             Responses.llm_response(message),
         )

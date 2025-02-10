@@ -5,17 +5,12 @@ from pathlib import Path
 import hikari
 import tanjun
 
-from settings import DISCORD_BOT_TOKEN
+from settings import DISCORD_BOT_TOKEN, TEST_GUILD
 
 if os.name != "nt":
     import uvloop
 
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-
-
-# TODO: CHANGE NICKNAME
-# TODO: IMPERSONATE
-# TODO: BOT FIRST MESSAGE
 
 BOT = hikari.GatewayBot(
     intents=hikari.Intents.ALL,
@@ -24,9 +19,10 @@ BOT = hikari.GatewayBot(
 
 client = tanjun.Client.from_gateway_bot(
     BOT,
-    declare_global_commands=True,
+    declare_global_commands=TEST_GUILD or True,
     mention_prefix=True,
 )
+
 
 client.load_modules(
     *[f for f in Path("./modules/st").glob("*.py") if f.name != "__init__.py"]

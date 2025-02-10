@@ -1,16 +1,18 @@
+import pickle
 import hikari
 import requests
 import tanjun
 from hikari.channels import DMChannel, TextableChannel
 
-from helpers import is_st_started
-from settings import CHARACTER_NAME, LOCAL_SERVER_PORT
+from helpers import is_st_started, get_nickname
+from settings import CHARACTER_NAME, LOCAL_SERVER_PORT, TEMP_FOLDER
 from st_server import Datas, Responses
+from pprint import pprint
 
 REQUEST_URL = f"http://127.0.0.1:{LOCAL_SERVER_PORT}"
 CARD_URL = f"{REQUEST_URL}/card"
 CHAT_URL = f"{REQUEST_URL}/chat"
-REGENERATE_URL = f"{REQUEST_URL}/regenerate"
+GREET_URL = f"{REQUEST_URL}/greet"
 
 component = tanjun.Component()
 
@@ -19,12 +21,21 @@ component = tanjun.Component()
 async def on_load(event: hikari.events.StartedEvent):
     rest = event.app.rest
 
-    # Try to get ST avatar
+    # Try to get ST avatar and greetings
     if is_st_started():
-        # trunk-ignore(bandit/B113)
+        # trunk-ignore-all(bandit/B113)
         resp = requests.get(CARD_URL)
         path = resp.json()["data"]["path"]
         await rest.edit_my_user(username=CHARACTER_NAME, avatar=path)
+        print("Loaded character name and avatar.")
+
+        resp = requests.get(GREET_URL)
+        greetings = resp.json()["data"]["messages"]
+
+        if greetings:
+            print("Loaded greetings.")
+            with open(f"{TEMP_FOLDER}/greetings.pkl", "+wb") as file:
+                pickle.dump(greetings, file)
     else:
         await rest.edit_my_user(username=CHARACTER_NAME)
 
@@ -67,11 +78,10 @@ async def on_message(event: hikari.MessageCreateEvent) -> None:
         # Direct Message
         async with channel.trigger_typing():
             data = Datas.for_dm(
-                author_handle=author_handle,
+                author_handle=get_nickname(author_handle),
                 message=event.message.content,
             )
 
-            # trunk-ignore(bandit/B113)
             resp: requests.models.Response = requests.post(CHAT_URL, json=data)
             resp_data: Responses.Response = resp.json()
             await channel.send(resp_data["data"]["message"])
@@ -81,14 +91,13 @@ async def on_message(event: hikari.MessageCreateEvent) -> None:
         # Group Message with trigger
         async with channel.trigger_typing():
             data = Datas.for_group(
-                author_handle=author_handle,
+                author_handle=get_nickname(author_handle),
                 guild_id=guild_id,
                 channel_id=channel_id,
                 message=content,
                 trigger=True,
             )
 
-            # trunk-ignore(bandit/B113)
             resp = requests.post(CHAT_URL, json=data)
             resp_data = resp.json()
             await channel.send(resp_data["data"]["message"])
@@ -96,13 +105,13 @@ async def on_message(event: hikari.MessageCreateEvent) -> None:
         # Group Message without trigger
         async with channel.trigger_typing():
             data = Datas.for_group(
-                author_handle=author_handle,
+                author_handle=get_nickname(author_handle),
                 guild_id=guild_id,
                 channel_id=channel_id,
                 message=content,
                 trigger=False,
             )
-            # trunk-ignore(bandit/B113)
+
             resp = requests.post(CHAT_URL, json=data)
 
 
