@@ -1,6 +1,7 @@
 import asyncio
+import os
 from time import sleep
-from typing import Any, Literal, Optional, TypedDict
+from typing import Any, Literal, Optional, Sequence, TypedDict
 
 import nest_asyncio
 from aiohttp import web
@@ -35,8 +36,10 @@ MANAGE_CHAT_FILES = '//span[@data-i18n="Manage chat files"]'
 
 CHAT_HISTORY_NEW = '//div[@id="newChatFromManageScreenButton"]'
 CHAT_HISTORY_BLOCKS = '//div[@class="select_chat_block  wide100p flex-container"]'
+CHAT_HISTORY_SELECTED_BLOCK = '//div[@highlight="true"]'
 
 RENAME_CHAT = '//div[@title="Rename chat file"]'
+DELETE_CHAT = '//div[@title="Delete chat file"]'
 POPUP_RENAME_CHAT = '//textarea[@id="dialogue_popup_input"]'
 
 MESSAGE_LAST_CONTEXT = '//div[@class="mes lastInContext"]'
@@ -44,15 +47,23 @@ MESSAGE_LLM = '//div[@class="mes last_mes"]'
 MESSAGE_LLM_EDIT = '//div[@class="mes_button mes_edit fa-solid fa-pencil interactable"]'
 MESSAGE_LLM_TEXTAREA = '//textarea[@id="curEditTextarea"]'
 MESSAGE_LLM_CANCEL_EDIT = '//div[@title="Cancel"]'
-MESSAGE_LLM_REGENERATE = (
-    '//div[@class="swipe_right fa-solid fa-chevron-right interactable"]'
-)
+
+MENU_REGENERATE = '//span[@data-i18n="Regenerate"]'
 
 
 ## CHARACTER
 CHARACTERS = '//div[@id="rightNavDrawerIcon"]'
 LLM_CHARACTER = f'//span[@title="[Character] {CHARACTER_NAME}"]'
 LLM_GROUP_CHARACTER = f'//div[@title="[Group] Group: {CHARACTER_NAME}"]'
+CHARACTER_EXPORT = '//div[@id="export_button"]'
+CARD_PNG = '//div[@data-format="png"]'
+CHARACTER_FIRST_MESSAGE = '//textarea[@id="firstmessage_textarea"]'
+ALTERNATE_GREET_POPUP_BODY = '//div[@class="popup-content"]'
+ALTERNATE_GREET_LIST_BUTTON = '//span[@data-i18n="Alt. Greetings"]'
+ALTERNATE_GREET_LIST = (
+    '//div[@class="alternate_greetings_list flexFlowColumn flex-container wide100p"]'
+)
+ALTERNATE_GREET_ITEM = '//div[@class="alternate_greeting"]'
 
 ## PERSONA
 PERSONA_MANAGEMENT = '//div[@title="Persona Management"]'
@@ -79,6 +90,7 @@ class Datas:
         chat: str
         message: str
         character: str
+        group: bool
         trigger: bool
 
     @staticmethod
@@ -88,14 +100,52 @@ class Datas:
             "chat": json.get("chat", ""),
             "message": json.get("message", ""),
             "character": json.get("character", ""),
+            "group": json.get("group", False),
             "trigger": json.get("trigger", False),
         }
+
+    @staticmethod
+    def for_dm(
+        author_handle: str,
+        message: str = "",
+    ) -> Data:
+        return {
+            "persona": author_handle,
+            "chat": author_handle,
+            "message": message,
+            "character": "",
+            "trigger": False,
+            "group": False,
+        }
+
+    @staticmethod
+    def for_group(
+        author_handle: str,
+        guild_id: int,
+        channel_id: int,
+        message: str = "",
+        trigger: bool = False,
+    ) -> Data:
+        return {
+            "persona": author_handle,
+            "chat": f"{guild_id}_{channel_id}",
+            "message": message,
+            "character": "",
+            "trigger": trigger,
+            "group": True,
+        }
+
+
+class ResponseData(TypedDict, total=False):
+    message: str
+    path: str
+    messages: list[str]
 
 
 class Responses:
     class Response(TypedDict):
         status: Literal["success", "error"]
-        data: dict[str, str]
+        data: ResponseData
         message: str
 
     @staticmethod
@@ -115,7 +165,7 @@ class Responses:
         }
 
     @staticmethod
-    def successful_llm_response(llm_message: str) -> Response:
+    def llm_response(llm_message: str) -> Response:
         return {
             "status": "success",
             "data": {"message": llm_message},
@@ -128,6 +178,30 @@ class Responses:
             "status": "success",
             "data": {},
             "message": "Message sent successfully",
+        }
+
+    @staticmethod
+    def file_path(path: str) -> Response:
+        return {
+            "status": "success",
+            "data": {"path": os.path.abspath(path)},
+            "message": "",
+        }
+
+    @staticmethod
+    def responses(messages: list[str]) -> Response:
+        return {
+            "status": "success",
+            "data": {"messages": messages},
+            "message": "",
+        }
+
+    @staticmethod
+    def success_clear() -> Response:
+        return {
+            "status": "success",
+            "data": {},
+            "message": "Chat history deleted",
         }
 
 
@@ -143,7 +217,7 @@ class ST:
     @classmethod
     async def create(cls, playwright: Playwright):
         browsertype = playwright.chromium  # or "firefox" or "webkit".
-        browser = await browsertype.launch(headless=True, slow_mo=50)
+        browser = await browsertype.launch(headless=False, slow_mo=50)
         page = await browser.new_page()
         page.set_default_navigation_timeout(PLAYWRIGHT_TIMEOUT)
         page.set_default_timeout(PLAYWRIGHT_TIMEOUT)
@@ -161,6 +235,18 @@ class ST:
         await self.page.wait_for_selector(THROBBER, state="visible", timeout=5000)
         await self.page.wait_for_selector(THROBBER, state="hidden", timeout=5000)
 
+    async def get_character_card(self):
+        await self.page.click(CHARACTERS)
+        await self.page.click(LLM_CHARACTER)
+        await self.page.click(CHARACTER_EXPORT)
+        async with self.page.expect_download() as dl:
+            await self.page.click(CARD_PNG)
+        download = await dl.value
+
+        save_path = f"ST_SERVER_TEMP/{download.suggested_filename}"
+        await download.save_as(save_path)
+        return save_path
+
     async def select_direct(self):
         await self.page.click(CHARACTERS)
         await self.page.click(LLM_CHARACTER)
@@ -173,7 +259,7 @@ class ST:
 
     async def send_message(self, message: str):
         await self.page.locator(CHAT_AREA).fill(message)
-        await self.page.click(CHAT_SEND)
+        await self.page.locator(CHAT_AREA).press("Enter")
 
     async def start(self):
         await self.page.click(CONNECTIONS)
@@ -245,12 +331,21 @@ class ST:
             await self.page.click(OK_2)
             await self.page.click(CLOSE)
 
+    async def delete_selected_chat(self):
+        await self.page.click(CHAT_MENU)
+        await self.page.click(MANAGE_CHAT_FILES)
+        await (
+            self.page.locator(CHAT_HISTORY_SELECTED_BLOCK).locator(DELETE_CHAT).click()
+        )
+        await self.page.click(OK_2)
+        await self.wait_load()
+
     async def switch_or_new_group_chat(self, chat_name: str):
         await self.page.click(CHAT_MENU)
         await self.page.click(MANAGE_CHAT_FILES)
 
         loc_existing_group_chat = self.page.get_by_text(chat_name, exact=True)
-        if loc_existing_group_chat.is_visible(timeout=700):
+        if await loc_existing_group_chat.is_visible(timeout=700):
             print(f"Switching to chat {chat_name}")
             await loc_existing_group_chat.click()
             await self.wait_load()
@@ -336,6 +431,32 @@ class ST:
         await self.page.click(PERSONA_MANAGEMENT)
         sleep(0.2)
 
+    async def get_llm_greetings(self):
+        await self.page.click(CHARACTERS)
+        await self.page.click(LLM_CHARACTER)
+
+        greet_main = [await self.page.locator(CHARACTER_FIRST_MESSAGE).input_value()]
+
+        await self.page.click(ALTERNATE_GREET_LIST_BUTTON)
+        await (
+            self.page.locator(ALTERNATE_GREET_POPUP_BODY)
+            .locator(ALTERNATE_GREET_LIST)
+            .wait_for()
+        )
+
+        greets = (
+            await self.page.locator(ALTERNATE_GREET_POPUP_BODY)
+            .locator(ALTERNATE_GREET_LIST)
+            .locator(ALTERNATE_GREET_ITEM)
+            .all()
+        )
+
+        all_greets = greet_main + [
+            await x.locator("//textarea").input_value() for x in greets
+        ]
+
+        return all_greets
+
     async def get_llm_response(self):
         await self.page.wait_for_selector(MESSAGE_LAST_CONTEXT)
         loc = self.page.locator(MESSAGE_LLM).locator(MESSAGE_LLM_EDIT)
@@ -359,11 +480,94 @@ class ST:
         await self.send_message(message)
         sleep(0.2)
 
+    async def send_group_message_and_trigger(
+        self, persona: str, chat_name: str, message: str
+    ):
+        await self.select_group()
+        await self.switch_or_new_group_chat(chat_name)
+        await self.switch_or_new_persona(persona)
+        await self.send_message(message)
+        sleep(0.2)
+        await self.send_message("/trigger")
+        return await self.get_llm_response()
+
     async def trigger_llm_group_message(self, chat_name: str):
         await self.select_group()
         await self.switch_or_new_group_chat(chat_name)
         await self.send_message("/trigger")
         return await self.get_llm_response()
+
+    async def renegerate_direct_message(self, persona: str, chat_name: str):
+        await self.select_direct()
+        await self.switch_or_new_chat(chat_name)
+        await self.switch_or_new_persona(persona)
+        await self.page.click(CHAT_MENU)
+        await self.page.click(MENU_REGENERATE)
+        return await self.get_llm_response()
+
+    async def regenerate_group_message(self, persona: str, chat_name: str):
+        await self.select_group()
+        await self.switch_or_new_group_chat(chat_name)
+        await self.switch_or_new_persona(persona)
+        await self.page.click(CHAT_MENU)
+        await self.page.click(MENU_REGENERATE)
+        return await self.get_llm_response()
+
+    async def clear_chat_history(self, chat_name: str):
+        await self.select_direct()
+
+        await self.page.click(CHAT_MENU)
+        await self.page.click(MANAGE_CHAT_FILES)
+
+        loc_existing_chat = self.page.get_by_text(chat_name + ".jsonl", exact=True)
+
+        if await loc_existing_chat.is_visible(timeout=700):
+            print(f"Deleting {chat_name}")
+            await loc_existing_chat.click()
+            await self.wait_load()
+            await self.delete_selected_chat()
+
+        print(f"Creating new chat {chat_name}")
+        await self.page.click(CHAT_HISTORY_NEW)
+        await self.page.click(CHAT_MENU)
+        await self.page.click(MANAGE_CHAT_FILES)
+
+        blocks = await self.page.query_selector_all(CHAT_HISTORY_BLOCKS)
+        rename_chat = await blocks[0].query_selector(RENAME_CHAT)
+        if rename_chat is None:
+            raise RuntimeError("Can't find rename_chat! Did UI change?")
+        await rename_chat.click()
+        await self.type(POPUP_RENAME_CHAT, chat_name)
+        await self.page.click(OK_2)
+        await self.page.click(CLOSE)
+
+    async def clear_group_chat_history(self, chat_name: str):
+        await self.select_group()
+
+        await self.page.click(CHAT_MENU)
+        await self.page.click(MANAGE_CHAT_FILES)
+
+        loc_existing_group_chat = self.page.get_by_text(chat_name, exact=True)
+
+        if await loc_existing_group_chat.is_visible(timeout=700):
+            print(f"Deleting {chat_name}")
+            await loc_existing_group_chat.click()
+            await self.wait_load()
+            await self.delete_selected_chat()
+
+        print(f"Creating new chat {chat_name}")
+        await self.page.click(CHAT_HISTORY_NEW)
+        await self.page.click(CHAT_MENU)
+        await self.page.click(MANAGE_CHAT_FILES)
+
+        blocks = await self.page.query_selector_all(CHAT_HISTORY_BLOCKS)
+        rename_chat = await blocks[0].query_selector(RENAME_CHAT)
+        if rename_chat is None:
+            raise RuntimeError("Can't find rename_chat! Did UI change?")
+        await rename_chat.click()
+        await self.type(POPUP_RENAME_CHAT, chat_name)
+        await self.page.click(OK_2)
+        await self.page.click(CLOSE)
 
     async def done(self):
         await self.page.reload()
@@ -387,9 +591,12 @@ class AsyncServer:
 
     def setup_routes(self):
         self.app.router.add_get("/", self.main)
-        self.app.router.add_post("/stop", self.stop)
+        self.app.router.add_get("/heartbeat", self.main)
+        self.app.router.add_get("/card", self.card)
+        self.app.router.add_get("/greet", self.greet)
         self.app.router.add_post("/chat", self.chat)
-        self.app.router.add_post("/groupchat", self.groupchat)
+        self.app.router.add_post("/regenerate", self.regenerate)
+        self.app.router.add_post("/clear", self.clear)
 
     async def main(self, request: web.Request):
         return web.json_response(
@@ -397,14 +604,29 @@ class AsyncServer:
             status=200,
         )
 
-    async def stop(self, request: web.Request):
-        await self.st.close()
-        await self.app.shutdown()
-        exit()
+    async def card(self, requeest: web.Request):
+        path = await self.st.get_character_card()
+        await self.st.done()
+        return web.json_response(
+            Responses.file_path(path),
+            status=200,
+        )
 
-    def validate_data_for_chat(self, data: Datas.Data):
+    async def greet(self, request: web.Request):
+        greets = await self.st.get_llm_greetings()
+        await self.st.done()
+        return web.json_response(
+            Responses.responses(greets),
+            status=200,
+        )
+
+    def validate_data_for_chat(
+        self,
+        data: Datas.Data,
+        required_keys: Sequence[str] = ("persona", "chat", "message", "group"),
+    ):
         missing_keys: list[str] = []
-        for key in ["persona", "chat", "message"]:
+        for key in required_keys:
             # trunk-ignore(mypy/literal-required)
             if not data[key]:
                 missing_keys.append(key)
@@ -424,53 +646,97 @@ class AsyncServer:
         val_resp = self.validate_data_for_chat(data)
 
         if val_resp:
+            if data["trigger"] and data["persona"] and not data["chat"]:
+                # Trigger only and wait for chat message
+                message = await self.st.trigger_llm_group_message(data["chat"])
+                await self.st.done()
+                print(f"{self.name}: Success.")
+                return web.json_response(
+                    Responses.llm_response(message),
+                )
+            print(f"{self.name}: Failure.")
             return val_resp
 
-        message = await self.st.send_direct_message(
-            # trunk-ignore-all(mypy/arg-type)
-            persona=data.get("persona"),
-            message=data.get("message"),
-            chat_name=data.get("chat"),
-        )
-        await self.st.done()
+        if data["group"]:
+            if data["trigger"]:
+                # Wait for response if trigger
+                message = await self.st.send_group_message_and_trigger(
+                    persona=data["persona"],
+                    chat_name=data["chat"],
+                    message=data["message"],
+                )
+                await self.st.done()
+                print(f"{self.name}: Success.")
+                return web.json_response(
+                    Responses.llm_response(message),
+                )
+            else:
+                # Just send if not trigger
+                await self.st.send_group_message(
+                    persona=data["persona"],
+                    message=data["message"],
+                    chat_name=data["chat"],
+                )
+                await self.st.done()
+                print(f"{self.name}: Success.")
+                return web.json_response(Responses.successful_send())
 
-        print(f"{self.name}: Success.")
-        return web.json_response(
-            Responses.successful_llm_response(message),
-        )
-
-    async def groupchat(self, request: web.Request):
-        data: Datas.Data = await request.json()
-        print(f"{self.name}: Received chat request:\n{data}")
-        val_resp = self.validate_data_for_chat(data)
-
-        if val_resp and data["trigger"] and not data["chat"]:
-            message = await self.st.trigger_llm_group_message(data["chat"])
-            await self.st.done()
-            print(f"{self.name}: Success.")
-            return web.json_response(
-                Responses.successful_llm_response(message),
+        else:
+            # Direct Message
+            message = await self.st.send_direct_message(
+                # trunk-ignore-all(mypy/arg-type)
+                persona=data.get("persona"),
+                message=data.get("message"),
+                chat_name=data.get("chat"),
             )
-        elif val_resp and not data["trigger"]:
-            return val_resp
-
-        await self.st.send_group_message(
-            persona=data["persona"],
-            message=data["message"],
-            chat_name=data["chat"],
-        )
-
-        if data["trigger"]:
-            message = await self.st.trigger_llm_group_message(data["chat"])
             await self.st.done()
+
             print(f"{self.name}: Success.")
             return web.json_response(
-                Responses.successful_llm_response(message),
+                Responses.llm_response(message),
+            )
+
+    async def regenerate(self, request: web.Request):
+        data: Datas.Data = await request.json()
+        print(f"{self.name}: Received regenerate request:\n{data}")
+        val_resp = self.validate_data_for_chat(data, ("persona", "chat", "group"))
+
+        if val_resp:
+            return val_resp
+
+        if data["group"]:
+            message = await self.st.regenerate_group_message(
+                persona=data["persona"],
+                chat_name=data["chat"],
             )
         else:
-            await self.st.done()
-            print(f"{self.name}: Success.")
-            return web.json_response(Responses.successful_send())
+            message = await self.st.renegerate_direct_message(
+                persona=data["persona"],
+                chat_name=data["chat"],
+            )
+        await self.st.done()
+        print(f"{self.name}: Success.")
+        return web.json_response(
+            Responses.llm_response(message),
+        )
+
+    async def clear(self, request: web.Request):
+        data: Datas.Data = await request.json()
+        print(f"{self.name}: Received clear request:\n{data}")
+        val_resp = self.validate_data_for_chat(data, ("chat", "group"))
+
+        if val_resp:
+            return val_resp
+
+        if data["group"]:
+            await self.st.clear_group_chat_history(data["chat"])
+        else:
+            await self.st.clear_chat_history(data["chat"])
+        await self.st.done()
+        print(f"{self.name}: Success.")
+        return web.json_response(
+            Responses.success_clear(),
+        )
 
     async def run(self):
         print(f"Starting server at {self.host}:{self.port}...")
@@ -484,6 +750,8 @@ async def main():
     async with async_playwright() as playwright:
         st = await ST.create(playwright)
         await st.done()
+
+        # input("Enter to continue")
 
         ass = AsyncServer(st)
         await ass.run()
